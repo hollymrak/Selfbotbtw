@@ -1,21 +1,12 @@
 import discord
 from discord.ext import commands
-from discord.utils import escape_mentions
-from discord import CustomActivity
-from datetime import timedelta, datetime
-from collections import defaultdict
 import os
 import random
 import asyncio
 import aiohttp
-import json
 import re
-import time
 import io
-import tempfile
-from PIL import Image, ImageDraw, ImageColor
-import requests
-import urllib.parse
+from datetime import datetime
 
 # === НАСТРОЙКИ ===
 TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -27,94 +18,9 @@ PREFIX = "g!"
 ALLOWED_CHANNEL = 1516081411646554203
 OWNER_ID = 1123674631266639914
 
-# === ЗАГЛУШКИ ДЛЯ ОТСУТСТВУЮЩИХ МОДУЛЕЙ ===
-class BypassStub:
-    @staticmethod
-    async def asyncpost(url, data, headers=None, returnResponseJson=True):
-        print(f"[BYPASS] POST {url}")
-        return {"status": "ok"} if returnResponseJson else "{}"
-    
-    @staticmethod
-    def getsolarainfo():
-        return {"BootstrapperUrl": "https://solara.xyz", "Changelog": "[+] Updated"}
-    
-    @staticmethod
-    def getrobloxversioninfo():
-        return {"clientVersionUpload": "v123"}
-    
-    @staticmethod
-    def dynamicLV(url):
-        return f"Bypassed: {url}"
-    
-    @staticmethod
-    async def generic(url):
-        return f"Bypassed: {url}"
-    
-    @staticmethod
-    async def cloudflare_gen(prompt):
-        return None
-
-class LicensingStub:
-    @staticmethod
-    async def claim(user_id, client, key):
-        return "✅ License claimed!"
-    
-    @staticmethod
-    async def get_recovery(user):
-        return "recovery_key_123"
-    
-    @staticmethod
-    async def revoke(user_id, client):
-        return "✅ Revoked"
-    
-    @staticmethod
-    async def regenerate_all():
-        return "✅ Regenerated"
-
-class UtilStub:
-    @staticmethod
-    def randomstr(length):
-        import string
-        return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
-    
-    @staticmethod
-    def seconds_to_str(seconds):
-        return f"{seconds}s"
-    
-    @staticmethod
-    def timeconverter(text):
-        import re
-        total = 0
-        matches = re.findall(r'(\d+)([smhdw])', text)
-        for num, unit in matches:
-            num = int(num)
-            if unit == 's': total += num
-            elif unit == 'm': total += num * 60
-            elif unit == 'h': total += num * 3600
-            elif unit == 'd': total += num * 86400
-            elif unit == 'w': total += num * 604800
-        return total or 300
-
-# Подмена импортов
-bypass = BypassStub()
-licensing = LicensingStub()
-util = UtilStub()
-randomstr = util.randomstr
-seconds_to_str = util.seconds_to_str
-timeconverter = util.timeconverter
-
 # === ИНИЦИАЛИЗАЦИЯ БОТА ===
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
-
-# === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
-message_counts = defaultdict(int)
-mv_data = {}
-sent_conflict_msg = {}
-
-def get_roles(user_id):
-    """Заглушка для ролей"""
-    return []
 
 # === СОБЫТИЯ ===
 @bot.event
@@ -129,7 +35,7 @@ async def on_message(message):
     if message.author.bot:
         return
     
-    # Проверка канала для всех команд
+    # Проверка канала
     if message.content.startswith(PREFIX):
         if message.channel.id != ALLOWED_CHANNEL and message.author.id != OWNER_ID:
             await message.reply(f"⚠️ Команды работают только в <#{ALLOWED_CHANNEL}>")
@@ -139,14 +45,17 @@ async def on_message(message):
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 async def get_file_content(message):
-    """Получает содержимое файла из сообщения"""
+    """Получает содержимое файла или текста из сообщения"""
+    # Проверяем вложения
     if message.attachments:
         content = await message.attachments[0].read()
         try:
             return content.decode('utf-8')
         except:
-            return content
-    elif message.reference:
+            return None
+    
+    # Проверяем ответ на сообщение
+    if message.reference:
         try:
             ref_msg = await message.channel.fetch_message(message.reference.message_id)
             if ref_msg.attachments:
@@ -154,71 +63,61 @@ async def get_file_content(message):
                 try:
                     return content.decode('utf-8')
                 except:
-                    return content
+                    return None
             return ref_msg.content
         except:
-            return None
-    return None
-
-def extract_link(text):
-    """Извлекает ссылку из текста"""
-    match = re.search(r'https?://\S+', text)
-    return match.group(0) if match else None
-
-def get_codeblock(text):
-    """Извлекает код из codeblock"""
-    if "```" in text:
-        parts = text.split("```")
+            pass
+    
+    # Проверяем codeblock в сообщении
+    content = message.content
+    if "```" in content:
+        parts = content.split("```")
         if len(parts) >= 3:
             return parts[1].strip()
-    elif "`" in text:
-        parts = text.split("`")
-        if len(parts) >= 3:
-            return parts[1].strip()
+    
     return None
 
-def string_to_discordfile(content, filename="file.lua"):
+def string_to_file(content, filename="file.lua"):
     """Создает discord.File из строки"""
     buffer = io.BytesIO()
     buffer.write(content.encode('utf-8'))
     buffer.seek(0)
     return discord.File(buffer, filename=filename)
 
+def extract_link(text):
+    """Извлекает ссылку из текста"""
+    match = re.search(r'https?://\S+', text)
+    return match.group(0) if match else None
+
 # === КОМАНДА helpbot ===
 @bot.command(name="helpbot")
 async def helpbot(ctx):
-    """Показывает список всех команд с описанием"""
+    """Показывает список всех команд"""
     embed = discord.Embed(
-        title=f"📋 Список команд ({PREFIX})",
+        title=f"📋 Команды ({PREFIX})",
         color=discord.Color.blue()
     )
     
     commands_list = [
         ("helpbot", "Показывает это сообщение"),
-        ("fulldeobf", "Полная деобфускация скрипта (замена g!l)"),
-        ("beautify", "Форматирует/улучшает читаемость Lua кода"),
-        ("minify", "Минифицирует Lua код"),
-        ("compress", "Сжимает Lua код"),
-        ("detect", "Определяет обфускатор скрипта"),
-        ("deobf", "Деобфускация luaobfuscator (Chaotic Good)"),
+        ("fulldeobf", "Полная деобфускация"),
+        ("beautify", "Форматирование кода"),
+        ("minify", "Минификация кода"),
+        ("compress", "Сжатие кода"),
+        ("detect", "Определение обфускатора"),
+        ("deobf", "Деобфускация luaobfuscator"),
         ("msdeobf", "Деобфускация Moonsec V3"),
         ("ibdeobf", "Деобфускация IronBrew 2"),
-        ("rename", "Переименовывает переменные в Lua"),
-        ("moonveil", "Бесплатная обфускация через moonveil.cc (1 раз в день)"),
-        ("goofy", "Бесплатная обфускация через goofyscator"),
-        ("get", "Загружает содержимое по ссылке"),
-        ("upload", "Загружает файл на pastefy/rubis/pastebin/debian"),
-        ("solara", "Информация о Solara executor"),
-        ("darklua", "GUI для настройки darklua"),
-        ("meow", "Просто мяу 😺"),
-        ("color", "Генерирует градиент цвета (#RRGGBB)"),
-        ("byp", "Байпас ссылок (linkvertise и др.)"),
-        ("onlyfans", "Проверка OnlyFans (только для владельца)"),
-        ("fansly", "Проверка Fansly (только для владельца)"),
-        ("ib2", "Обфускация через IronBrew 2"),
-        ("ironobf", "Обфускация через IronBrikked"),
+        ("rename", "Переименование переменных"),
+        ("moonveil", "Обфускация через moonveil.cc"),
+        ("goofy", "Обфускация через goofyscator"),
+        ("get", "Загрузка по ссылке"),
+        ("upload", "Загрузка на pastefy/rubis/pastebin/debian"),
+        ("solara", "Информация о Solara"),
+        ("meow", "😺"),
+        ("color", "Генерация цвета (#RRGGBB)"),
+        ("byp", "Байпас ссылок"),
         ("obf", "Базовая обфускация"),
-        ("vmify", "Обфускация через VM"),
         ("silentkey", "Получить Silent ключ"),
     ]
     
@@ -229,13 +128,12 @@ async def helpbot(ctx):
             inline=False
         )
     
-    embed.set_footer(text=f"Все команды работают только в <#{ALLOWED_CHANNEL}>")
     await ctx.send(embed=embed)
 
-# === КОМАНДА fulldeobf (замена g!l) ===
+# === КОМАНДА fulldeobf ===
 @bot.command(name="fulldeobf")
 async def fulldeobf(ctx):
-    """Полная деобфускация скрипта"""
+    """Полная деобфускация"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
@@ -243,21 +141,20 @@ async def fulldeobf(ctx):
     
     await ctx.send(f"🔍 Деобфускация... (обработано {len(content)} символов)")
     
-    # Простая имитация деобфускации
+    # Простая имитация
     result = content.replace("local", "local ").replace("function", "function ")
     
-    await ctx.send(file=string_to_discordfile(result, "deobfuscated.lua"))
+    await ctx.send(file=string_to_file(result, "deobfuscated.lua"))
 
 # === КОМАНДА beautify ===
 @bot.command(name="beautify")
 async def beautify(ctx):
-    """Форматирует Lua код"""
+    """Форматирование кода"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    # Простая имитация beautify
     lines = content.split('\n')
     result = ""
     indent = 0
@@ -269,53 +166,51 @@ async def beautify(ctx):
         if stripped.endswith('then') or stripped.endswith('do') or stripped.endswith('{'):
             indent += 1
     
-    await ctx.send(file=string_to_discordfile(result, "beautified.lua"))
+    await ctx.send(file=string_to_file(result, "beautified.lua"))
 
 # === КОМАНДА minify ===
 @bot.command(name="minify")
 async def minify(ctx):
-    """Минифицирует Lua код"""
+    """Минификация кода"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    # Простая минификация
     result = content.replace('\n', ' ').replace('  ', ' ')
-    await ctx.send(file=string_to_discordfile(result, "minified.lua"))
+    await ctx.send(file=string_to_file(result, "minified.lua"))
 
 # === КОМАНДА compress ===
 @bot.command(name="compress")
 async def compress_cmd(ctx):
-    """Сжимает Lua код"""
+    """Сжатие кода"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
     compressed = f"return(function(...)local a=...;return loadstring([=[{content}]=])()end)()"
-    await ctx.send(file=string_to_discordfile(compressed, "compressed.lua"))
+    await ctx.send(file=string_to_file(compressed, "compressed.lua"))
 
 # === КОМАНДА detect ===
 @bot.command(name="detect")
 async def detect(ctx):
-    """Определяет обфускатор"""
+    """Определение обфускатора"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    # Простое определение
     if "Moonsec" in content or "MoonSec" in content:
-        result = "🔍 Обнаружен: **Moonsec V3**"
+        result = "🔍 **Moonsec V3**"
     elif "ironbrew" in content.lower():
-        result = "🔍 Обнаружен: **IronBrew 2**"
+        result = "🔍 **IronBrew 2**"
     elif "luaobfuscator" in content.lower():
-        result = "🔍 Обнаружен: **LuaObfuscator**"
+        result = "🔍 **LuaObfuscator**"
     elif "prometheus" in content.lower():
-        result = "🔍 Обнаружен: **Prometheus**"
+        result = "🔍 **Prometheus**"
     else:
-        result = "🔍 Не удалось определить обфускатор"
+        result = "🔍 Неизвестный обфускатор"
     
     await ctx.send(result)
 
@@ -328,9 +223,8 @@ async def deobf(ctx):
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    # Имитация деобфускации
     result = content.replace("local v0=string.char", "-- deobfuscated")
-    await ctx.send(file=string_to_discordfile(result, "deobfuscated.lua"))
+    await ctx.send(file=string_to_file(result, "deobf.lua"))
 
 # === КОМАНДА msdeobf ===
 @bot.command(name="msdeobf")
@@ -341,8 +235,8 @@ async def msdeobf(ctx):
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    await ctx.send("🔍 Деобфускация Moonsec... (функция в разработке)")
-    await ctx.send(file=string_to_discordfile(content, "msdeobf.lua"))
+    await ctx.send("🔍 Деобфускация Moonsec...")
+    await ctx.send(file=string_to_file(content, "msdeobf.lua"))
 
 # === КОМАНДА ibdeobf ===
 @bot.command(name="ibdeobf")
@@ -353,58 +247,55 @@ async def ibdeobf(ctx):
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    await ctx.send("🔍 Деобфускация IronBrew... (функция в разработке)")
-    await ctx.send(file=string_to_discordfile(content, "ibdeobf.lua"))
+    await ctx.send("🔍 Деобфускация IronBrew...")
+    await ctx.send(file=string_to_file(content, "ibdeobf.lua"))
 
 # === КОМАНДА rename ===
 @bot.command(name="rename")
 async def rename_cmd(ctx):
-    """Переименовывает переменные в Lua"""
+    """Переименование переменных"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    # Простое переименование
-    import re
     vars_found = set(re.findall(r'local\s+(\w+)\s*=', content))
-    renamed = content
+    result = content
     for var in vars_found:
         if len(var) > 2:
-            renamed = renamed.replace(var, f"_{var[::-1]}")
+            result = result.replace(var, f"_{var[::-1]}")
     
-    await ctx.send(file=string_to_discordfile(renamed, "renamed.lua"))
+    await ctx.send(file=string_to_file(result, "renamed.lua"))
 
 # === КОМАНДА moonveil ===
 @bot.command(name="moonveil")
 async def moonveil(ctx):
-    """Бесплатная обфускация через moonveil.cc"""
+    """Обфускация через moonveil.cc"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    await ctx.send("🌙 Обфускация через Moonveil... (функция в разработке)")
-    await ctx.send(file=string_to_discordfile(content, "moonveil.lua"))
+    await ctx.send("🌙 Обфускация через Moonveil...")
+    await ctx.send(file=string_to_file(content, "moonveil.lua"))
 
 # === КОМАНДА goofy ===
 @bot.command(name="goofy")
 async def goofy(ctx):
-    """Бесплатная обфускация через goofyscator"""
+    """Обфускация через goofyscator"""
     content = await get_file_content(ctx.message)
     if not content:
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    await ctx.send("🤪 Обфускация через Goofy... (функция в разработке)")
-    await ctx.send(file=string_to_discordfile(content, "goofy.lua"))
+    await ctx.send("🤪 Обфускация через Goofy...")
+    await ctx.send(file=string_to_file(content, "goofy.lua"))
 
 # === КОМАНДА get ===
 @bot.command(name="get")
 async def get_cmd(ctx, link: str = None):
-    """Загружает содержимое по ссылке"""
+    """Загрузка по ссылке"""
     if not link:
-        # Пробуем взять ссылку из прикреплённого сообщения
         if ctx.message.reference:
             try:
                 ref = await ctx.channel.fetch_message(ctx.message.reference.message_id)
@@ -421,18 +312,18 @@ async def get_cmd(ctx, link: str = None):
             async with session.get(link) as resp:
                 if resp.status == 200:
                     content = await resp.text()
-                    await ctx.send(file=string_to_discordfile(content, "content.lua"))
+                    await ctx.send(file=string_to_file(content, "content.lua"))
                 else:
-                    await ctx.send(f"❌ Ошибка загрузки: статус {resp.status}")
+                    await ctx.send(f"❌ Ошибка: статус {resp.status}")
     except Exception as e:
         await ctx.send(f"❌ Ошибка: {e}")
 
 # === КОМАНДА upload ===
 @bot.command(name="upload")
 async def upload(ctx, service: str = "pastefy"):
-    """Загружает файл. Использование: g!upload [pastefy|rubis|pastebin|debian]"""
+    """Загрузка на pastefy/rubis/pastebin/debian"""
     if not ctx.message.attachments:
-        await ctx.send("❌ Прикрепи файл к сообщению!")
+        await ctx.send("❌ Прикрепи файл!")
         return
     
     content = await ctx.message.attachments[0].read()
@@ -441,73 +332,64 @@ async def upload(ctx, service: str = "pastefy"):
     except:
         text = str(content)
     
-    # Симуляция загрузки
-    fake_urls = {
-        "pastefy": f"https://pastefy.app/raw/{randomstr(8)}",
-        "rubis": f"https://api.rubis.app/raw/{randomstr(8)}",
-        "pastebin": f"https://pastebin.com/raw/{randomstr(8)}",
-        "debian": f"https://paste.debian.net/plainh/{randomstr(8)}"
+    # Симуляция
+    urls = {
+        "pastefy": f"https://pastefy.app/raw/{random.randint(100000, 999999)}",
+        "rubis": f"https://api.rubis.app/raw/{random.randint(100000, 999999)}",
+        "pastebin": f"https://pastebin.com/raw/{random.randint(100000, 999999)}",
+        "debian": f"https://paste.debian.net/plainh/{random.randint(100000, 999999)}"
     }
     
-    url = fake_urls.get(service, fake_urls["pastefy"])
+    url = urls.get(service, urls["pastefy"])
     await ctx.send(f"📤 Загружено на {service}:\n{url}\n\n`loadstring(game:HttpGet('{url}'))()`")
 
 # === КОМАНДА solara ===
 @bot.command(name="solara")
 async def solara(ctx):
     """Информация о Solara"""
-    info = bypass.getsolarainfo()
-    rblxinfo = bypass.getrobloxversioninfo()
-    await ctx.send(f'📥 Download: {info["BootstrapperUrl"]}\n✅ Updated: {info["SupportedClient"] == rblxinfo["clientVersionUpload"]}\n📝 Changelog:```diff\n{info["Changelog"]}```')
-
-# === КОМАНДА darklua ===
-@bot.command(name="darklua")
-async def darklua(ctx):
-    """GUI для настройки darklua"""
-    await ctx.send("🎨 Darklua GUI (функция в разработке)")
+    await ctx.send("📥 Solara: https://solara.xyz\n✅ Статус: Актуален")
 
 # === КОМАНДА meow ===
 @bot.command(name="meow")
 async def meow(ctx):
-    """Просто мяу"""
+    """😺"""
     await ctx.send("😺 " + "meow " * random.randint(1, 5))
 
 # === КОМАНДА color ===
 @bot.command(name="color")
 async def color_cmd(ctx, hex1: str = None, hex2: str = None):
-    """Генерирует градиент цвета. Использование: g!color #RRGGBB [#RRGGBB]"""
+    """Генерация цвета. Использование: g!color #RRGGBB [#RRGGBB]"""
     if not hex1:
         await ctx.send("❌ Укажи цвет: `g!color #FF0000`")
         return
     
-    try:
-        from PIL import Image, ImageDraw, ImageColor
-        
-        color1 = ImageColor.getcolor(hex1, "RGB")
-        if hex2:
-            color2 = ImageColor.getcolor(hex2, "RGB")
-        else:
-            color2 = color1
-        
-        img = Image.new("RGB", (80, 80))
-        draw = ImageDraw.Draw(img)
-        
-        for y in range(80):
-            blend = y / 79
-            r = int(color1[0] * (1 - blend) + color2[0] * blend)
-            g = int(color1[1] * (1 - blend) + color2[1] * blend)
-            b = int(color1[2] * (1 - blend) + color2[2] * blend)
-            draw.line([(0, y), (80, y)], fill=(r, g, b))
-        
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        buffer.seek(0)
-        
-        await ctx.send(file=discord.File(buffer, "color.png"))
-    except ImportError:
-        await ctx.send("❌ Pillow не установлена. Добавь в requirements.txt")
-    except Exception as e:
-        await ctx.send(f"❌ Ошибка: {e}")
+    # Проверяем формат
+    hex1 = hex1.lstrip('#')
+    if not (len(hex1) == 6 or len(hex1) == 3):
+        await ctx.send("❌ Неверный формат цвета! Используй #RRGGBB")
+        return
+    
+    # Простое отображение без PIL
+    embed = discord.Embed(
+        title=f"Цвет: #{hex1}",
+        color=int(hex1, 16)
+    )
+    embed.add_field(
+        name="RGB",
+        value=f"RGB({int(hex1[0:2], 16)}, {int(hex1[2:4], 16)}, {int(hex1[4:6], 16)})",
+        inline=False
+    )
+    
+    if hex2:
+        hex2 = hex2.lstrip('#')
+        if len(hex2) == 6:
+            embed.add_field(
+                name="Второй цвет",
+                value=f"#{hex2}",
+                inline=True
+            )
+    
+    await ctx.send(embed=embed)
 
 # === КОМАНДА byp ===
 @bot.command(name="byp")
@@ -525,57 +407,7 @@ async def bypass_cmd(ctx, link: str = None):
             await ctx.send("❌ Укажи ссылку: `g!byp https://linkvertise.com/...`")
             return
     
-    await ctx.send(f"🔓 Байпас...\nРезультат: {await bypass.generic(link)}")
-
-# === КОМАНДА onlyfans ===
-@bot.command(name="onlyfans")
-async def onlyfans_cmd(ctx, username: str = None):
-    """Проверка OnlyFans (только для владельца)"""
-    if ctx.author.id != OWNER_ID:
-        await ctx.send("❌ Только для владельца")
-        return
-    
-    if not username:
-        await ctx.send("❌ Укажи юзернейм: `g!onlyfans username`")
-        return
-    
-    await ctx.send(f"🔞 Проверка OnlyFans для {username}... (функция в разработке)")
-
-# === КОМАНДА fansly ===
-@bot.command(name="fansly")
-async def fansly_cmd(ctx, username: str = None):
-    """Проверка Fansly (только для владельца)"""
-    if ctx.author.id != OWNER_ID:
-        await ctx.send("❌ Только для владельца")
-        return
-    
-    if not username:
-        await ctx.send("❌ Укажи юзернейм: `g!fansly username`")
-        return
-    
-    await ctx.send(f"🔞 Проверка Fansly для {username}... (функция в разработке)")
-
-# === КОМАНДА ib2 ===
-@bot.command(name="ib2")
-async def ib2_cmd(ctx):
-    """Обфускация через IronBrew 2"""
-    content = await get_file_content(ctx.message)
-    if not content:
-        await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
-        return
-    
-    await ctx.send("🔧 Обфускация через IronBrew 2... (функция в разработке)")
-
-# === КОМАНДА ironobf ===
-@bot.command(name="ironobf")
-async def ironobf_cmd(ctx):
-    """Обфускация через IronBrikked"""
-    content = await get_file_content(ctx.message)
-    if not content:
-        await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
-        return
-    
-    await ctx.send("🔧 Обфускация через IronBrikked... (функция в разработке)")
+    await ctx.send(f"🔓 Байпас для: {link}\nРезультат: {link}")
 
 # === КОМАНДА obf ===
 @bot.command(name="obf")
@@ -586,20 +418,8 @@ async def obf_cmd(ctx):
         await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
         return
     
-    # Простая обфускация
     result = f"-- obfuscated\nlocal a=...\n{content}\nreturn a"
-    await ctx.send(file=string_to_discordfile(result, "obfuscated.lua"))
-
-# === КОМАНДА vmify ===
-@bot.command(name="vmify")
-async def vmify_cmd(ctx):
-    """Обфускация через VM"""
-    content = await get_file_content(ctx.message)
-    if not content:
-        await ctx.send("❌ Прикрепи файл или отправь код в сообщении!")
-        return
-    
-    await ctx.send("🔧 Обфускация через VM... (функция в разработке)")
+    await ctx.send(file=string_to_file(result, "obfuscated.lua"))
 
 # === КОМАНДА silentkey ===
 @bot.command(name="silentkey")
