@@ -19,7 +19,6 @@ class InviteView(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'Bot {bot.user} is online')
-    
     activity = discord.Game(name="HollyScriptX")
     await bot.change_presence(activity=activity)
     
@@ -49,4 +48,8 @@ async def status(ctx):
     view = InviteView()
     await ctx.send(embed=embed, view=view)
 
-bot.run(TOKEN)
+if __name__ == "__main__":
+    if TOKEN is None:
+        print("ERROR: DISCORD_TOKEN not set!")
+    else:
+        bot.run(TOKEN)
